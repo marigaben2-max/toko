@@ -360,8 +360,12 @@ h1,h2,h3,p{margin:0}
 .sc-top .t b{display:block;font-size:16px}
 .sc-top .t small{opacity:.75;font-size:12px}
 .sc-cam{position:relative;width:100%;aspect-ratio:4/3;background:#000;overflow:hidden;flex:none}
-#sc-region{position:absolute;inset:0}
-#sc-region video{width:100%!important;height:100%!important;object-fit:cover;border-radius:0}
+/* html5-qrcode menyetel position:relative + border langsung (inline) pada #sc-region, dan tinggi video mengikuti rasio kamera.
+   Di ponsel (kamera portrait) video jadi lebih tinggi dari kotak, sehingga pusat video — dan kotak scan — turun ke bawah.
+   !important mengalahkan style inline itu: wadah dikunci penuh mengisi .sc-cam, video di-cover & dipusatkan. */
+#sc-region{position:absolute!important;inset:0!important;width:100%!important;height:100%!important;margin:0!important;padding:0!important;border:0!important;overflow:hidden!important}
+#sc-region video{position:absolute!important;inset:0!important;width:100%!important;height:100%!important;object-fit:cover!important;object-position:center!important;border-radius:0!important;display:block!important}
+#sc-region #qr-shaded-region{inset:0!important;box-sizing:border-box!important}
 .sc-msg{position:absolute;left:14px;right:14px;top:50%;transform:translateY(-50%);text-align:center;font-size:13.5px;line-height:1.5;opacity:.92;pointer-events:none}
 .sc-bottom{padding:12px 14px calc(14px + env(safe-area-inset-bottom,0px));display:flex;flex-direction:column;gap:10px;background:#0c1a15;flex:none}
 .sc-status{min-height:40px;border-radius:14px;padding:9px 14px;background:rgba(255,255,255,.12);font-weight:700;font-size:13.5px;display:flex;align-items:center;gap:8px}
@@ -1670,6 +1674,19 @@ function scCfg() {
   if (F) c.formatsToSupport = [F.EAN_13, F.EAN_8, F.UPC_A, F.UPC_E, F.CODE_128, F.CODE_39, F.CODE_93, F.ITF, F.QR_CODE].filter(x => x !== undefined);
   return c;
 }
+// Ukuran kotak scan (dipakai pustaka lewat qrbox, dan untuk memusatkan ulang kotaknya).
+const scBox = (w, h) => ({ width: Math.max(80, Math.floor(Math.min(w * 0.92, 340))), height: Math.max(60, Math.floor(Math.min(h * 0.5, 150))) });
+// Pastikan kotak scan tepat di tengah area kamera (.sc-cam), juga setelah layar berubah ukuran / diputar.
+function scCenterBox() {
+  try {
+    const cam = $('.sc-cam'), sh = $('#qr-shaded-region');
+    if (!cam || !sh) return;
+    const w = cam.clientWidth, h = cam.clientHeight; if (!w || !h) return;
+    const b = scBox(w, h);
+    sh.style.borderWidth = `${Math.max(0, (h - b.height) / 2)}px ${Math.max(0, (w - b.width) / 2)}px`;
+  } catch (e) { }
+}
+{ const cam = $('.sc-cam'); if (cam && window.ResizeObserver) new ResizeObserver(scCenterBox).observe(cam); else window.addEventListener('resize', scCenterBox); }
 let actx;
 function beep() {
   if (!S.settings.beep) return;
@@ -1697,9 +1714,10 @@ async function openScanner(opts) {
   try {
     inst = new Html5Qrcode('sc-region', scCfg()); SC.inst = inst;
     const camConfig = { facingMode: 'environment', focusMode: 'continuous', width: { ideal: 1280 }, height: { ideal: 720 }, advanced: [{ focusMode: 'continuous' }] };
-    await inst.start(camConfig, { fps: 12, aspectRatio: 1.5, disableFlip: true, qrbox: (w, h) => ({ width: Math.max(80, Math.floor(Math.min(w * 0.92, 340))), height: Math.max(60, Math.floor(Math.min(h * 0.5, 150))) }), videoConstraints: camConfig }, onDecoded, () => { });
+    await inst.start(camConfig, { fps: 12, aspectRatio: 1.5, disableFlip: true, qrbox: scBox, videoConstraints: camConfig }, onDecoded, () => { });
     if (SC.opts !== opts) { try { await inst.stop(); inst.clear(); } catch (e) { } return; }
     setScStatus('Arahkan kamera ke barcode');
+    scCenterBox(); requestAnimationFrame(scCenterBox); setTimeout(scCenterBox, 300);
     try {
       const cap = inst.getRunningTrackCameraCapabilities && inst.getRunningTrackCameraCapabilities();
       if (cap) {

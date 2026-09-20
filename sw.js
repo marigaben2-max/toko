@@ -1,4 +1,4 @@
-const CACHE_NAME = 'warung-sembako-v1';
+const CACHE_NAME = 'warung-sembako-v2';
 const APP_SHELL = [
   './',
   './index.html',
