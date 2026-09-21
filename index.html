@@ -520,7 +520,8 @@ const S = {
   pmap: new Map(), bmap: new Map(), cmap: new Map(), ver: 0,
   cart: { mode: 'eceran', lines: [], discount: 0 },
   kasir: { q: '', cat: 'Semua' }, produk: { q: '', f: 'semua' }, hutang: { q: '', tab: 'aktif' },
-  period: { key: 'hari', from: '', to: '' }, lap: { top: 'qty', page: 1 }, ck: { method: 'tunai' }
+  period: { key: 'hari', from: '', to: '' }, lap: { top: 'qty', page: 1 }, ck: { method: 'tunai' },
+  cloud: { user: null, ready: false, lastSync: null }
 };
 function reindex() {
   S.pmap = new Map(S.products.map(p => [p.id, p]));
@@ -587,7 +588,7 @@ async function loadAll() {
 }
 async function save(ops) {
   if (!ops.length) return true;
-  try { await batch(ops); return true; }
+  try { await batch(ops); scheduleCloudBackup(); return true; }
   catch (err) {
     console.error(err);
     toast('Gagal menyimpan data (' + ((err && err.name) || 'error') + ')', 'err');
@@ -597,6 +598,27 @@ async function save(ops) {
   }
 }
 const saveSettings = () => save([['put', 'settings', { key: 'app', ...S.settings }]]);
+
+/* ================= CADANGAN CLOUD (opsional) ================= */
+let cloudTimer = null;
+function scheduleCloudBackup() {
+  if (!S.cloud.user || !window.CloudSync) return;
+  clearTimeout(cloudTimer);
+  cloudTimer = setTimeout(() => { doCloudBackup().catch(e => console.error('cloud backup gagal', e)); }, 6000);
+}
+function snapshotData() {
+  return { app: 'warung-sembako', version: 2, exportedAt: new Date().toISOString(), data: { products: S.products, customers: S.customers, sales: S.sales, payments: S.payments, expenses: S.expenses, movements: S.movements, settings: S.settings } };
+}
+async function doCloudBackup() {
+  if (!S.cloud.user || !window.CloudSync) return;
+  const snap = snapshotData();
+  await window.CloudSync.backupNow(snap);
+  S.cloud.lastSync = snap.exportedAt;
+  if (S.view === 'data') render();
+}
+document.addEventListener('cloud-ready', () => { S.cloud.ready = true; if (S.view === 'data') render(); });
+document.addEventListener('cloud-auth', e => { S.cloud.user = e.detail; if (S.view === 'data') render(); });
+document.addEventListener('cloud-login-error', e => toast('Gagal masuk: ' + e.detail, 'err'));
 
 /* ================= PERHITUNGAN ================= */
 function tierOf(l, p) {
@@ -1120,6 +1142,17 @@ VIEWS.data = () => {
     <div class="btns"><button class="btn btn-p" data-act="export-backup">${ic('database', 'sm')} Ekspor cadangan Excel</button><button class="btn btn-s" data-act="import-pick">${ic('undo', 'sm')} Pulihkan / impor</button></div>
     <div class="btns" style="margin-top:10px"><button class="btn btn-b btn-sm" data-act="export-template">${ic('copy', 'sm')} Templat produk Excel</button><button class="btn btn-b btn-sm" data-act="export-json">Cadangan JSON</button></div>
     <p class="mut sm" style="margin-top:10px">Impor menerima file .xlsx hasil ekspor, templat produk, .csv produk, dan .json.</p></div>
+  <div class="card" style="margin-top:14px"><div class="row" style="margin-bottom:10px"><div class="av h-b" style="width:44px;height:44px;border-radius:14px;background:var(--bl);color:var(--bt);display:grid;place-items:center">${ic('share')}</div><div class="grow"><b>Cadangan Cloud (opsional)</b><div class="mut sm">${S.cloud.user ? `Masuk sebagai ${esc(S.cloud.user.email)}` : 'Belum masuk'}</div></div></div>
+    <p class="mut sm" style="margin-bottom:12px">Kalau HP hilang atau rusak, data bisa dipulihkan otomatis lewat akun ini. Setelah masuk, cadangan tersimpan otomatis tiap ada perubahan data. Data disimpan di akun cloud milik Anda sendiri.</p>
+    ${S.cloud.user ? `
+    <div class="btns"><button class="btn btn-p" data-act="cloud-backup-now">${ic('database', 'sm')} Cadangkan ke Cloud sekarang</button><button class="btn btn-s" data-act="cloud-restore">${ic('undo', 'sm')} Pulihkan dari Cloud</button></div>
+    <button class="lnk" style="margin-top:10px" data-act="cloud-logout">Keluar dari akun cloud</button>
+    ${S.cloud.lastSync ? `<p class="mut sm" style="margin-top:8px">Sinkron cloud terakhir: ${esc(new Date(S.cloud.lastSync).toLocaleString('id-ID'))}</p>` : ''}
+    ` : `
+    <label class="fld"><span>Email</span><input class="inp" id="cloudEmail" type="email" placeholder="nama@email.com" autocomplete="email"></label>
+    <button class="btn btn-p block" data-act="cloud-login">Kirim link masuk</button>
+    <p class="mut sm" style="margin-top:8px">Anda akan menerima email berisi link masuk. Buka link itu di HP ini — tidak perlu bikin atau mengingat password.</p>
+    `}</div>
   <div class="card"><b>Ekspor laporan (CSV)</b><div class="mut sm" style="margin:4px 0 12px">Untuk dibaca di Excel atau Google Sheets. Untuk pindah HP, pakai cadangan Excel di atas.</div>
     <div class="btns"><button class="btn btn-b btn-sm" data-act="csv" data-k="produk">Produk</button><button class="btn btn-b btn-sm" data-act="csv" data-k="transaksi">Transaksi</button><button class="btn btn-b btn-sm" data-act="csv" data-k="hutang">Buku hutang</button><button class="btn btn-b btn-sm" data-act="csv" data-k="biaya">Biaya</button><button class="btn btn-b btn-sm" data-act="csv" data-k="stok">Riwayat stok</button></div></div>
   <div class="card"><b>Info toko</b><div class="mut sm" style="margin:4px 0 12px">Tampil di struk.</div>
@@ -2275,6 +2308,32 @@ A['export-json'] = async () => {
   const data = { app: 'warung-sembako', version: 2, exportedAt: new Date().toISOString(), data: { products: S.products, customers: S.customers, sales: S.sales, payments: S.payments, expenses: S.expenses, movements: S.movements, settings: S.settings } };
   if (await saveFile(`cadangan-warung-${dkey(new Date())}.json`, JSON.stringify(data))) await markBackup();
 };
+A['cloud-login'] = async () => {
+  const el = $('#cloudEmail'), email = el ? el.value.trim() : '';
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) { toast('Masukkan email yang valid', 'err'); return; }
+  if (!window.CloudSync) { toast('Modul cloud belum siap, coba lagi sebentar', 'err'); return; }
+  try { await window.CloudSync.sendLoginLink(email); toast('Link masuk sudah dikirim ke ' + email + '. Buka email lalu klik linknya di HP ini.', 'ok'); }
+  catch (e) { console.error(e); toast('Gagal mengirim link: ' + ((e && e.message) || e), 'err'); }
+};
+A['cloud-logout'] = async () => {
+  if (window.CloudSync) await window.CloudSync.logout();
+  toast('Berhasil keluar dari akun cloud', 'ok');
+};
+A['cloud-backup-now'] = async t => {
+  if (!window.CloudSync) { toast('Modul cloud belum siap, coba lagi sebentar', 'err'); return; }
+  if (t) t.disabled = true;
+  try { await doCloudBackup(); toast('Cadangan cloud tersimpan', 'ok'); }
+  catch (e) { console.error(e); toast('Gagal cadangan ke cloud: ' + ((e && e.message) || e), 'err'); }
+  if (t) t.disabled = false;
+};
+A['cloud-restore'] = async () => {
+  if (!window.CloudSync) { toast('Modul cloud belum siap, coba lagi sebentar', 'err'); return; }
+  try {
+    const data = await window.CloudSync.restoreNow();
+    if (!data) { toast('Belum ada cadangan cloud untuk akun ini', 'err'); return; }
+    await importJSON(JSON.stringify(data));
+  } catch (e) { console.error(e); toast('Gagal memulihkan dari cloud: ' + ((e && e.message) || e), 'err'); }
+};
 A['export-template'] = async () => { try { await saveFile('templat-produk-warung.xlsx', new Blob([await buildXlsx(templateSheets())], { type: XLSX_MIME })); } catch (e) { toast('Gagal membuat templat', 'err'); } };
 A['import-pick'] = () => $('#fileImport').click();
 $('#fileImport').addEventListener('change', e => { const f = e.target.files && e.target.files[0]; e.target.value = ''; if (f) importFile(f); });
@@ -2320,6 +2379,74 @@ if ('serviceWorker' in navigator) {
 
 })();
 
+</script>
+
+<script type="module">
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-app.js";
+  import {
+    getAuth, sendSignInLinkToEmail, isSignInWithEmailLink, signInWithEmailLink,
+    onAuthStateChanged, signOut
+  } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-auth.js";
+  import { getFirestore, doc, setDoc, getDoc } from "https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore.js";
+
+  const firebaseConfig = {
+    apiKey: "AIzaSyBKauhI-u5ulBtdliZ7zx34aQRCE_3wSlU",
+    authDomain: "tokosaya-12.firebaseapp.com",
+    databaseURL: "https://tokosaya-12-default-rtdb.asia-southeast1.firebasedatabase.app",
+    projectId: "tokosaya-12",
+    storageBucket: "tokosaya-12.firebasestorage.app",
+    messagingSenderId: "807221678636",
+    appId: "1:807221678636:web:692b9c4bf503546d69b789"
+  };
+
+  const EMAIL_KEY = 'wsCloudEmail';
+  const fbApp = initializeApp(firebaseConfig);
+  const auth = getAuth(fbApp);
+  const db = getFirestore(fbApp);
+
+  function emitAuth(user) {
+    document.dispatchEvent(new CustomEvent('cloud-auth', {
+      detail: user ? { email: user.email, uid: user.uid } : null
+    }));
+  }
+  onAuthStateChanged(auth, emitAuth);
+
+  async function completeLinkSignInIfNeeded() {
+    if (!isSignInWithEmailLink(auth, window.location.href)) return;
+    let email = window.localStorage.getItem(EMAIL_KEY);
+    if (!email) email = window.prompt('Masukkan email yang tadi dipakai untuk minta link masuk:');
+    if (!email) return;
+    try {
+      await signInWithEmailLink(auth, email, window.location.href);
+      window.localStorage.setItem(EMAIL_KEY, email);
+    } catch (e) {
+      console.error(e);
+      document.dispatchEvent(new CustomEvent('cloud-login-error', { detail: String((e && e.message) || e) }));
+    }
+    window.history.replaceState({}, document.title, window.location.pathname + window.location.hash);
+  }
+  completeLinkSignInIfNeeded();
+
+  window.CloudSync = {
+    async sendLoginLink(email) {
+      const actionCodeSettings = { url: window.location.href.split('#')[0], handleCodeInApp: true };
+      await sendSignInLinkToEmail(auth, email, actionCodeSettings);
+      window.localStorage.setItem(EMAIL_KEY, email);
+    },
+    async logout() { await signOut(auth); },
+    getUser() { return auth.currentUser ? { email: auth.currentUser.email, uid: auth.currentUser.uid } : null; },
+    async backupNow(dataObj) {
+      const u = auth.currentUser; if (!u) throw new Error('Belum masuk akun cloud');
+      await setDoc(doc(db, 'backups', u.uid), dataObj);
+      return true;
+    },
+    async restoreNow() {
+      const u = auth.currentUser; if (!u) throw new Error('Belum masuk akun cloud');
+      const snap = await getDoc(doc(db, 'backups', u.uid));
+      return snap.exists() ? snap.data() : null;
+    }
+  };
+  document.dispatchEvent(new CustomEvent('cloud-ready'));
 </script>
 </body>
 </html>
